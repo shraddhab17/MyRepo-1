@@ -1,0 +1,80 @@
+pipeline {
+    agent {label 'slave1'}
+    parameters {
+        choice(name:"ProjectPath",choices:["com/jio/sdn/sdnorchestrator","com/jio/commonservices/identityandaccessmanager","com/jio/commonservices/oam","com/jio/commonservices/edgeloadbalancer","com/jio/fiveg/scp/hastatemanager","com/jio/commonservices/jionotificationhub"],description:"Select Full Microservice Artifactory Path")
+        string(name:"ArtifactoryVersion",defaultValue:"1.0.0",description:"Enter Artifactory Microservice Release Version",trim: true)
+        choice(name:"RepoName",choices:["jenkinsiot","jenkinsprod","jenkinsreplica"])
+        choice(name:"MSName",choices:["PEAG","IAM","OAM","UI_ELB","HSM","JNHS","JNHS-ELB"])
+        string(name:"MSfoldername",description:"Enter Artifactory Folder Name",trim: true)
+		string(name:"ZIPname",defaultValue:"MSname.zip",description:"Enter MS ZIP File Name with .zip extension",trim: true)
+		choice(name:"ServerIP",choices:["10.64.105.163","10.64.105.164","10.64.222.2","10.64.222.6","10.64.213.62","10.64.253.200"], description: """10.64.105.163-PEAG, JNHS, IAM, JNHS-ELB\n10.64.105.164-PEAG, JNHS, OAM\n10.64.222.2-UI_ELB, HSM\n10.64.222.6-UI_ELB, HSM\n10.64.213.62-OAM, CLI\n10.64.253.200-IAM""")
+    }
+    stages{
+        stage('Download Zip from artifactory'){
+            steps{
+                buildName "$MSName-$ArtifactoryVersion"
+                rtDownload(
+					serverId: 'http://10.64.217.191:8081/artifactory/',
+					spec: '''{
+					"files": [{
+						"pattern": "$RepoName/$ProjectPath/$ArtifactoryVersion/$ZIPname",
+						"target": "$RepoName/"
+					}]
+				}
+				'''
+			)
+			sh '''
+			cd $RepoName/$ProjectPath/$ArtifactoryVersion/
+			mv *.zip $MSName.zip
+			mv $MSName.zip $WORKSPACE 
+			cd $WORKSPACE
+			unzip $MSName.zip -d $MSName
+			rm -rf $MSName.zip $RepoName
+			'''
+            }
+        }
+		stage('Updating MS configuration w.r.t IOT setup'){
+            steps{
+			sh '''
+			rm -rf $WORKSPACE/$MSName/dist/$MSfoldername/configuration/*
+			rm -rf $WORKSPACE/$MSName/dist/$MSfoldername/config/*
+			rm -rf $WORKSPACE/$MSName/dist/$MSfoldername/bin/*.sh
+			rm -rf $WORKSPACE/$MSName/dist/$MSfoldername/Certificates/*
+			rm -rf $WORKSPACE/$MSName/dist/$MSfoldername/logs $WORKSPACE/$MSName/dist/$MSfoldername/dumps
+			cp -r /SDN_IOT_CONFIG/$MSName/${MSName}_$ServerIP/config*/* $WORKSPACE/$MSName/dist/$MSfoldername/config*/
+			cp -r /SDN_IOT_CONFIG/$MSName/${MSName}_$ServerIP/bin/*.sh $WORKSPACE/$MSName/dist/$MSfoldername/bin/
+			'''
+			script{
+			if (params.MSName == 'IAM'){
+			sh "cp -r /SDN_IOT_CONFIG/$MSName/${MSName}_$ServerIP/Certificates/* $WORKSPACE/$MSName/dist/$MSfoldername/Certificates/"
+			}
+			}
+			}
+		}
+		stage('MS Deployment'){
+            steps{
+			sshPublisher(publishers: [sshPublisherDesc(configName: "${env.ServerIP}", transfers: [sshTransfer(cleanRemote: false, excludes: '', execCommand: '''cd /root/SDN/$MSName/
+rm -rf bin/ configuration/ config/ lib/ OM-ATOM*''', execTimeout: 120000, flatten: false, makeEmptyDirs: false, noDefaultExcludes: false, patternSeparator: '[, ]+', remoteDirectory: '', remoteDirectorySDF: false, removePrefix: '', sourceFiles: ''), sshTransfer(cleanRemote: false, excludes: '', execCommand: 'cd SDN/$MSName/bin/; chmod 777 *.sh; nohup ./run*.sh >> nohup.out 2>&1 &', execTimeout: 120000, flatten: false, makeEmptyDirs: false, noDefaultExcludes: false, patternSeparator: '[, ]+', remoteDirectory: 'SDN/$MSName/', remoteDirectorySDF: false, removePrefix: '$MSName/dist/$MSfoldername', sourceFiles: '$MSName/dist/$MSfoldername/**/*')], usePromotionTimestamp: false, useWorkspaceInPromotion: false, verbose: false)])
+			}
+		}
+    }
+	  post{ 
+    success {
+        sh '''
+        echo "######################################"
+        echo "Current version of $MSName : $MSName-$ArtifactoryVersion" 
+        echo "######################################"
+      '''
+          cleanWs()
+      dir("${workspace}@tmp") {
+          deleteDir()
+         }
+    }
+    always {
+         cleanWs()
+     dir("${workspace}@tmp") {
+          deleteDir()
+        }
+    }
+  }
+}
