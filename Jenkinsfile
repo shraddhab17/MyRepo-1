@@ -2,7 +2,7 @@ pipeline {
     agent any
     options { checkoutToSubdirectory('foo') }
     stages {
-        stage('Hello') {
+        stage('Hello world') {
             steps {
                 echo 'world'
             }
